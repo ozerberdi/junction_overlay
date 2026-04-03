@@ -63,11 +63,17 @@ def fit_for_display(img: Image.Image, max_size: tuple[int, int]) -> Image.Image:
     return fitted
 
 
+def validate_input_path(input_path: Path) -> None:
+    if input_path.stem.endswith("_junction_overlay"):
+        raise ValueError("Please select the original source image, not a previously generated output.")
+
+
 def build_output_path(input_path: Path) -> Path:
     return OUTPUT_DIR / f"{input_path.stem}_junction_overlay.png"
 
 
 def process_image(input_path: Path) -> tuple[Image.Image, Path, int]:
+    validate_input_path(input_path)
     base_img = Image.open(input_path).convert("RGB")
     line_mask = load_line_mask(base_img)
     skeleton = skeletonize(line_mask)

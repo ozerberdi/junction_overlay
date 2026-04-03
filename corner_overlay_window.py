@@ -207,8 +207,11 @@ def build_output_path(input_path: Path) -> Path:
 
 
 def validate_input_path(input_path: Path) -> None:
-    if input_path.stem.endswith("_junction_overlay") or input_path.stem.endswith("_corner_overlay"):
-        raise ValueError("Please select the original source image, not a previously generated overlay.")
+    if (
+        input_path.stem.endswith("_junction_overlay")
+        or input_path.stem.endswith("_corner_overlay")
+    ):
+        raise ValueError("Please select the original source image, not a previously generated output.")
 
 
 def process_image(input_path: Path) -> tuple[Image.Image, Path, int, int, int]:

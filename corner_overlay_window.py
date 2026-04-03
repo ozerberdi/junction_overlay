@@ -88,6 +88,39 @@ def build_exclusion_mask(
     return exclude
 
 
+def lerp_color(
+    start: tuple[int, int, int], end: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
+    return tuple(
+        int(round(channel_start + (channel_end - channel_start) * t))
+        for channel_start, channel_end in zip(start, end)
+    )
+
+
+def color_for_strength(strength: float, low: float, high: float) -> tuple[int, int, int, int]:
+    if high <= low:
+        normalized = 1.0
+    else:
+        normalized = np.clip((strength - low) / (high - low), 0.0, 1.0)
+
+    anchors = [
+        (0.0, (70, 205, 255)),
+        (0.45, (255, 210, 60)),
+        (0.75, (255, 130, 35)),
+        (1.0, (220, 35, 35)),
+    ]
+
+    for index in range(1, len(anchors)):
+        left_pos, left_color = anchors[index - 1]
+        right_pos, right_color = anchors[index]
+        if normalized <= right_pos:
+            local_t = (normalized - left_pos) / (right_pos - left_pos)
+            rgb = lerp_color(left_color, right_color, float(local_t))
+            return (*rgb, 215)
+
+    return (*anchors[-1][1], 215)
+
+
 def walk_branch(
     start: tuple[int, int],
     prev: tuple[int, int],
@@ -123,7 +156,7 @@ def detect_corners(
     regular_mask: np.ndarray,
     junction_mask: np.ndarray,
     endpoint_mask: np.ndarray,
-) -> tuple[np.ndarray, list[tuple[int, int]], list[tuple[int, int]], np.ndarray]:
+) -> tuple[list[tuple[int, int, float]], list[tuple[int, int]], list[tuple[int, int]], np.ndarray]:
     junction_centers = connected_centers(junction_mask)
     endpoint_centers = connected_centers(endpoint_mask)
     exclude = build_exclusion_mask(skeleton.shape, junction_centers, endpoint_centers)
@@ -165,12 +198,16 @@ def detect_corners(
         threshold_abs=MIN_TURN_DEG,
         exclude_border=False,
     )
-    return corner_coords, junction_centers, endpoint_centers, exclude
+    corner_points = [
+        (int(x), int(y), float(corner_strength[y, x]))
+        for y, x in corner_coords
+    ]
+    return corner_points, junction_centers, endpoint_centers, exclude
 
 
 def overlay_result(
     base_img: Image.Image,
-    corner_coords: np.ndarray,
+    corner_points: list[tuple[int, int, float]],
     junction_centers: list[tuple[int, int]],
 ) -> Image.Image:
     overlay = base_img.convert("RGBA")
@@ -184,11 +221,16 @@ def overlay_result(
         )
         draw.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), fill=(0, 180, 255, 220))
 
-    for y, x in corner_coords:
+    strengths = [strength for _, _, strength in corner_points]
+    low_strength = min(strengths) if strengths else MIN_TURN_DEG
+    high_strength = max(strengths) if strengths else MIN_TURN_DEG
+
+    for x, y, strength in sorted(corner_points, key=lambda item: item[2]):
         radius = 7
+        fill_color = color_for_strength(strength, low_strength, high_strength)
         draw.ellipse(
             (x - radius, y - radius, x + radius, y + radius),
-            fill=(220, 30, 30, 210),
+            fill=fill_color,
             outline=(255, 255, 255, 230),
             width=2,
         )
@@ -217,13 +259,13 @@ def process_image(input_path: Path) -> tuple[Image.Image, Path, int, int, int]:
     line_mask = load_line_mask(base_img)
     skeleton = skeletonize(line_mask)
     regular_mask, junction_mask, endpoint_mask = classify_skeleton(skeleton)
-    corner_coords, junction_centers, endpoint_centers, _ = detect_corners(
+    corner_points, junction_centers, endpoint_centers, _ = detect_corners(
         skeleton, regular_mask, junction_mask, endpoint_mask
     )
-    overlay = overlay_result(base_img, corner_coords, junction_centers)
+    overlay = overlay_result(base_img, corner_points, junction_centers)
     output_path = build_output_path(input_path)
     overlay.save(output_path)
-    return overlay, output_path, len(corner_coords), len(junction_centers), len(endpoint_centers)
+    return overlay, output_path, len(corner_points), len(junction_centers), len(endpoint_centers)
 
 
 class CornerOverlayApp:

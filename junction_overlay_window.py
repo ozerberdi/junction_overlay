@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import math
 from pathlib import Path
 
@@ -10,19 +9,17 @@ from scipy import ndimage as ndi
 from skimage.filters import threshold_otsu
 from skimage.morphology import skeletonize
 import tkinter as tk
+from tkinter import filedialog, messagebox
 
 
-INPUT_PATH = Path(
-    "/Users/ozerozkan/Documents/gemini-image-gen/1980s_boxy_suv/level5.png"
-)
-OUTPUT_PATH = Path("/Users/ozerozkan/Documents/gemini-image-gen/2010s_compact_hatchback/level52.png")
+OUTPUT_DIR = Path(__file__).resolve().parent
 DISPLAY_MAX = (1600, 950)
 
 
-def load_line_mask(path: Path) -> np.ndarray:
-    gray = np.asarray(Image.open(path).convert("L"))
+def load_line_mask(base_img: Image.Image) -> np.ndarray:
+    gray = np.asarray(base_img.convert("L"))
     thresh = threshold_otsu(gray)
-    # The source is a light background with dark strokes.
+    # The source is expected to be a light background with dark strokes.
     return gray < thresh
 
 
@@ -66,47 +63,84 @@ def fit_for_display(img: Image.Image, max_size: tuple[int, int]) -> Image.Image:
     return fitted
 
 
-def show_window(display_img: Image.Image, title: str) -> None:
-    root = tk.Tk()
-    root.title(title)
-
-    tk_img = ImageTk.PhotoImage(display_img)
-    label = tk.Label(root, image=tk_img, borderwidth=0)
-    label.image = tk_img
-    label.pack()
-
-    info = tk.Label(
-        root,
-        text="Junction overlay preview. Close the window when done.",
-        padx=10,
-        pady=8,
-    )
-    info.pack()
-
-    root.mainloop()
+def build_output_path(input_path: Path) -> Path:
+    return OUTPUT_DIR / f"{input_path.stem}_junction_overlay.png"
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--no-window", action="store_true", help="Only save the overlay result.")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    base_img = Image.open(INPUT_PATH).convert("RGB")
-    line_mask = load_line_mask(INPUT_PATH)
+def process_image(input_path: Path) -> tuple[Image.Image, Path, int]:
+    base_img = Image.open(input_path).convert("RGB")
+    line_mask = load_line_mask(base_img)
     skeleton = skeletonize(line_mask)
     _, centers = detect_junctions(skeleton)
     overlay = overlay_result(base_img, skeleton, centers)
-    overlay.save(OUTPUT_PATH)
+    output_path = build_output_path(input_path)
+    overlay.save(output_path)
+    return overlay, output_path, len(centers)
 
-    print(f"Saved overlay to: {OUTPUT_PATH}")
-    print(f"Detected junction clusters: {len(centers)}")
 
-    if not args.no_window:
+class JunctionOverlayApp:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("Junction Overlay")
+        self.root.geometry("1660x1040")
+
+        controls = tk.Frame(root, padx=12, pady=12)
+        controls.pack(fill="x")
+
+        open_button = tk.Button(controls, text="Open Image", command=self.open_image, padx=14, pady=8)
+        open_button.pack(side="left")
+
+        self.status = tk.Label(
+            controls,
+            text="Select an image to skeletonize and overlay junction detections.",
+            anchor="w",
+            padx=12,
+        )
+        self.status.pack(side="left", fill="x", expand=True)
+
+        self.image_label = tk.Label(root, borderwidth=0)
+        self.image_label.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.image_label.image = None
+
+    def open_image(self) -> None:
+        input_path = filedialog.askopenfilename(
+            title="Open image",
+            initialdir=str(OUTPUT_DIR),
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not input_path:
+            return
+
+        try:
+            overlay, output_path, junction_count = process_image(Path(input_path))
+        except Exception as exc:
+            messagebox.showerror("Processing failed", str(exc))
+            self.status.config(text=f"Failed to process: {input_path}")
+            return
+
         display_img = fit_for_display(overlay, DISPLAY_MAX)
-        show_window(display_img, f"Junction Overlay - {INPUT_PATH.name}")
+        tk_img = ImageTk.PhotoImage(display_img)
+        self.image_label.config(image=tk_img)
+        self.image_label.image = tk_img
+
+        status_text = (
+            f"Saved to {output_path.name} in {OUTPUT_DIR} | "
+            f"Detected junction clusters: {junction_count}"
+        )
+        self.status.config(text=status_text)
+        print(f"Input image: {input_path}")
+        print(f"Saved overlay to: {output_path}")
+        print(f"Detected junction clusters: {junction_count}")
+
+
+def main() -> None:
+    root = tk.Tk()
+    app = JunctionOverlayApp(root)
+    app.open_image()
+    root.mainloop()
 
 
 if __name__ == "__main__":
